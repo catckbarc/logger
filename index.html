@@ -229,20 +229,53 @@
 
           unitDiv.classList.add('popup-highlight');
 
+          // New popup code (after applying auto-positioning)
           const popup = document.createElement('div');
           popup.id = 'floatingPopup';
-          popup.style.position = 'absolute';
-          popup.style.top = `${event.clientY + window.scrollY}px`;
-          popup.style.left = `${event.clientX}px`;
-          popup.style.zIndex = '1000';
-
+          
+          // Temporarily add to DOM to measure popup size
+          popup.style.visibility = 'hidden';
+          document.body.appendChild(popup);
+          
           popup.innerHTML = `
             <p>Range: ${rangeText}</p>
             <a href="${link}" target="_blank" style="color: blue; text-decoration: underline;">Open Link</a>
             <p>Loading image...</p>
           `;
-
-          document.body.appendChild(popup);
+          
+          const popupRect = popup.getBoundingClientRect();
+          popup.remove(); // Remove temporary popup
+          
+          // Now create the real popup
+          const finalPopup = document.createElement('div');
+          finalPopup.id = 'floatingPopup';
+          finalPopup.innerHTML = popup.innerHTML;
+          
+          // Determine screen space
+          const padding = 10;
+          let top = event.clientY + window.scrollY + padding;
+          let left = event.clientX + padding;
+          
+          const spaceRight = window.innerWidth - event.clientX;
+          const spaceBottom = window.innerHeight - event.clientY;
+          
+          if (spaceRight < popupRect.width + padding) {
+            left = event.clientX - popupRect.width - padding;
+          }
+          if (spaceBottom < popupRect.height + padding) {
+            top = event.clientY + window.scrollY - popupRect.height - padding;
+          }
+          
+          // If still negative, clamp to 0
+          if (left < 0) left = padding;
+          if (top < 0) top = padding;
+          
+          finalPopup.style.position = 'absolute';
+          finalPopup.style.left = `${left}px`;
+          finalPopup.style.top = `${top}px`;
+          finalPopup.style.zIndex = '1000';
+          
+          document.body.appendChild(finalPopup);
 
           try {
             const response = await fetch(imageUrl);
