@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Number Grid Highlighter</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body, html { height: 100%; font-family: Arial, sans-serif; background-color: #121212; color: #ffffff; }
+    .container {
+      display: flex;
+      height: 100%;
+      overflow: hidden; /* Prevent scrolling */
+    }
+    .grid {
+      flex: 1; /* Allow the grid to expand */
+      display: grid;
+      grid-template-columns: repeat(121, 1fr);
+      gap: 1px;
+      overflow: auto;
+      padding: 2px;
+      background: #1e1e1e;
+    }
+    .square {
+      background: #2c2c2c;
+      border: 1px solid #444;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      cursor: pointer;
+    }
+    .highlight {
+      background: rgb(0, 183, 255) !important;
+    }
+    .popup-highlight {
+      background: #ff5722 !important;
+    }
+    .sidebar {
+      border-left: 1px solid #444;
+      padding: 10px;
+      overflow-y: auto; /* Enable vertical scrolling */
+      background: #1e1e1e;
+      scrollbar-width: none; /* For Firefox */
+      -ms-overflow-style: none; /* For Internet Explorer and Edge */
+    }
+
+    .sidebar::-webkit-scrollbar {
+      display: none; /* For Chrome, Safari, and Opera */
+    }
+    .sidebar input {
+      padding: 5px;
+    }
+    .sidebar button {
+      padding: 0px 5px;
+      margin-right: 5px;
+      cursor: pointer;
+    }
+    .log-item span { flex: 1; font-size: 15px; }
+
+    /* Dark mode popup styles */
+    #floatingPopup {
+      position: absolute;
+      background: #1e1e1e; /* Dark background */
+      color: #ffffff; /* Light text color */
+      border: 1px solid #444; /* Subtle border */
+      padding: 10px;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5); /* Darker shadow */
+      border-radius: 5px; /* Rounded corners */
+      z-index: 1000;
+    }
+
+    #floatingPopup a {
+      color: #00b7ff; /* Bright link color */
+      text-decoration: underline;
+    }
+
+    #floatingPopup p {
+      margin: 5px 0;
+    }
+
+    #floatingPopup img {
+      max-width: 400px;
+      margin-top: 10px;
+      border-radius: 5px; /* Rounded corners for images */
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="grid" class="grid"></div>
+    <div class="sidebar" id="sidebar">
+      <div>
+        <div style="display: flex; align-items: center;">
+          <input type="text" id="rangeInput" placeholder="start#end" style="flex: 1;">
+          <button id="addRange" style="position: absolute; right: 10px; border: none; background: #444; color: #fff; cursor: pointer;">+</button>
+        </div>
+        <div style="margin-top: 10px;">
+          <button id="undoAction">Undo</button>
+          <button id="backToOriginalGrid">Back</button>
+        </div>
+      </div>
+      <h3>RangeList</h3>
+      <div id="rangeList"></div>
+    </div>
+  </div>
+
+  <script>
+    const START_NUM = 6762000;
+    const END_NUM = 7500000;
+    const STEP = 100;
+    const grid = document.getElementById('grid');
+    const sidebar = document.getElementById('sidebar');
+    let ranges = [];
+    let nextId = 1;
+    let actionHistory = [];
+    let redoHistory = [];
+
+    // Add a line element to the body
+    const line = document.createElement('div');
+    line.style.position = 'absolute';
+    line.style.height = '2px';
+    line.style.backgroundColor = 'yellow';
+    line.style.zIndex = '999';
+    line.style.pointerEvents = 'none'; // Prevent interaction
+    line.style.display = 'none'; // Initially hidden
+    document.body.appendChild(line);
+
+    // Function to position the line
+    function positionLine(rangeElement, gridSquare) {
+      const rangeRect = rangeElement.getBoundingClientRect();
+      const squareRect = gridSquare.getBoundingClientRect();
+
+      const startX = rangeRect.right;
+      const startY = rangeRect.top + rangeRect.height / 2;
+      const endX = squareRect.left + squareRect.width / 2;
+      const endY = squareRect.top + squareRect.height / 2;
+
+      const length = Math.sqrt((endX - startX) ** 2 + (endY - startY) ** 2);
+      const angle = Math.atan2(endY - startY, endX - startX) * (180 / Math.PI);
+
+      line.style.width = `${length}px`;
+      line.style.transform = `rotate(${angle}deg)`;
+      line.style.transformOrigin = '0 0';
+      line.style.left = `${startX}px`;
+      line.style.top = `${startY}px`;
+      line.style.display = 'block';
+    }
+
+    // Add hover functionality to range numbers
+    function addHoverEffectToRange(range, rangeElement) {
+      rangeElement.addEventListener('mouseenter', () => {
+        // Highlight the range text itself
+        rangeElement.style.backgroundColor = 'yellow';
+        rangeElement.style.color = 'black';
+
+        // Find the corresponding grid square
+        const gridSquare = Array.from(document.querySelectorAll('.square')).find(sq => {
+          const s = parseInt(sq.dataset.start, 10);
+          const e = parseInt(sq.dataset.end, 10);
+          return e >= range.start && s <= range.end;
+        });
+
+        // Position the line if a corresponding square is found
+        if (gridSquare) {
+          positionLine(rangeElement, gridSquare);
+        }
+      });
+
+      rangeElement.addEventListener('mouseleave', () => {
+        // Remove the highlight from the range text
+        rangeElement.style.backgroundColor = '';
+        rangeElement.style.color = '';
+
+        // Hide the line
+        line.style.display = 'none';
+      });
+    }
+
+    // Persistence
+    function saveRanges() {
+      localStorage.setItem('savedRanges', JSON.stringify(ranges));
+    }
+
+    function loadRanges() {
+      const saved = localStorage.getItem('savedRanges');
+      if (!saved) return;
+      try {
+        const arr = JSON.parse(saved);
+        arr.forEach(r => ranges.push(r));
+        nextId = ranges.reduce((max, r) => Math.max(max, r.id), 0) + 1;
+        ranges.forEach(r => {
+          highlight(r, true);
+          logRange(r);
+        });
+      } catch(e) {
+        console.error('Failed to load ranges', e);
+      }
+    }
+
+    // Add this function to handle displaying the 100 units within a square
+    function displayUnitsInSquare(start, end, parentSquare) {
+      // Clear the grid and prepare for unit display
+      grid.innerHTML = '';
+      grid.style.gridTemplateColumns = 'repeat(10, 1fr)'; // 10x10 grid for 100 units
+
+      for (let i = end; i >= start; i--) { // Reverse the loop
+        const unitDiv = document.createElement('div');
+        unitDiv.classList.add('square');
+        unitDiv.dataset.start = i; // Add dataset for highlighting
+        unitDiv.dataset.end = i;
+        unitDiv.textContent = i; // Display the unit number
+        unitDiv.style.fontSize = '12px'; // Adjust font size for better visibility
+
+        // Add popup functionality for each unit square
+        unitDiv.addEventListener('click', async (event) => {
+          event.stopPropagation();
+
+          const rangeText = `${i}#${i}`;
+          const link = `https://noz.rip/sketch_bunker/gallery.php?maxid=${i}#${i}`;
+          const imageUrl = `https://noz.rip/sketch_bunker/getIMG.php?id=${i}`;
+
+          const existingPopup = document.getElementById('floatingPopup');
+          if (existingPopup) {
+            const highlightedSquare = document.querySelector('.square.popup-highlight');
+            if (highlightedSquare) highlightedSquare.classList.remove('popup-highlight');
+            existingPopup.remove();
+          }
+
+          unitDiv.classList.add('popup-highlight');
+
+          const popup = document.createElement('div');
+          popup.id = 'floatingPopup';
+          popup.style.position = 'absolute';
+          popup.style.top = `${event.clientY + window.scrollY}px`;
+          popup.style.left = `${event.clientX}px`;
+          popup.style.zIndex = '1000';
+
+          popup.innerHTML = `
+            <p>Range: ${rangeText}</p>
+            <a href="${link}" target="_blank" style="color: blue; text-decoration: underline;">Open Link</a>
+            <p>Loading image...</p>
+          `;
+
+          document.body.appendChild(popup);
+
+          try {
+            const response = await fetch(imageUrl);
+            if (response.ok) {
+              const blob = await response.blob();
+              const img = document.createElement('img');
+              img.src = URL.createObjectURL(blob);
+              img.style.maxWidth = '400px';
+              img.style.marginTop = '10px';
+              popup.appendChild(img);
+            } else {
+              console.error('Failed to fetch image:', response.status);
+              popup.innerHTML += '<p style="color: red;">Failed to load image</p>';
+            }
+          } catch (error) {
+            console.error('Error fetching image:', error);
+            popup.innerHTML += '<p style="color: red;">Error loading image</p>';
+          }
+
+          document.addEventListener('click', () => {
+            if (popup) {
+              popup.remove();
+              unitDiv.classList.remove('popup-highlight');
+            }
+          }, { once: true });
+        });
+
+        grid.appendChild(unitDiv);
+      }
+
+      // Highlight intersecting ranges in the 100-unit grid
+      refreshRanges(); // Reapply highlights
+
+      // Add an event listener for the Escape key to go back to the original grid
+      document.addEventListener('keydown', function handleEscape(event) {
+        if (event.key === 'Escape') {
+          document.removeEventListener('keydown', handleEscape); // Remove listener
+          restoreOriginalGrid(); // Restore the original grid
+        }
+      });
+    }
+
+    // Restore the original grid view
+    function restoreOriginalGrid() {
+      grid.innerHTML = '';
+      grid.style.gridTemplateColumns = 'repeat(121, 1fr)'; // Restore original grid layout
+      makeGrid(); // Recreate the original grid
+      refreshRanges(); // Reapply highlights
+    }
+
+    // Generate grid squares
+    function makeGrid() {
+      for (let i = END_NUM; i >= START_NUM; i -= STEP) {
+        const div = document.createElement('div');
+        div.classList.add('square');
+        const rngEnd = i;
+        const rngStart = Math.max(i - STEP + 1, START_NUM);
+        div.dataset.start = rngStart;
+        div.dataset.end = rngEnd;
+
+        div.addEventListener('click', async (event) => {
+          event.stopPropagation();
+
+          const rngStart = parseInt(div.dataset.start, 10);
+          const rngEnd = parseInt(div.dataset.end, 10);
+
+          // Display the 100 units within the clicked square
+          displayUnitsInSquare(rngStart, rngEnd, div);
+        });
+
+        grid.appendChild(div);
+      }
+    }
+
+    // Highlight or unhighlight squares intersecting a range
+    function highlight(range, add = true) {
+      document.querySelectorAll('.square').forEach(sq => {
+        const s = parseInt(sq.dataset.start, 10);
+        const e = parseInt(sq.dataset.end, 10);
+        if (e >= range.start && s <= range.end) {
+          if (range.start === range.end) {
+            // Highlight single square ranges in red
+            sq.style.backgroundColor = add ? 'rgb(212, 23, 23)' : ''; // Red for single square
+          } else {
+            // Highlight other ranges in blue
+            sq.style.backgroundColor = add ? 'rgb(18, 166, 224)' : ''; // Blue for other ranges
+          }
+        }
+      });
+    }
+
+    // Refresh all ranges
+    function refreshRanges() {
+      document.querySelectorAll('.square').forEach(sq => {
+        sq.style.backgroundColor = ''; // Reset background color
+      });
+      ranges.forEach(r => highlight(r, true)); // Reapply highlights for all ranges
+    }
+
+    // Add entry to sidebar log
+    function logRange(range) {
+      const container = document.createElement('div');
+      container.classList.add('log-item');
+      container.id = `range-${range.id}`;
+
+      const label = document.createElement('span');
+      label.textContent = `${range.start}#${range.end}`;
+      label.style.cursor = 'pointer';
+      label.title = 'Click to edit';
+
+      // Add hover effect to the range label
+      addHoverEffectToRange(range, label);
+
+      // Clicking on the range allows editing
+      label.addEventListener('click', () => {
+        const newVal = prompt('Enter new range (start#end):', `${range.start}#${range.end}`);
+        if (!newVal || !/^\d+#\d+$/.test(newVal.trim())) {
+          showFloatingMessage('Invalid format. Use start#end.');
+          return;
+        }
+        let [s, e] = newVal.split('#').map(Number);
+        if (s < START_NUM || e < START_NUM || s > END_NUM || e > END_NUM) {
+          showFloatingMessage(`Numbers must be between ${START_NUM} and ${END_NUM}`);
+          return;
+        }
+        highlight(range, false);
+        range.start = Math.min(s, e);
+        range.end = Math.max(s, e);
+        highlight(range, true);
+        label.textContent = `${range.start}#${range.end}`;
+        saveRanges();
+      });
+
+      // Add hover functionality to highlight the range
+      container.addEventListener('mouseenter', () => {
+        highlightTemporary(range);
+      });
+
+      container.addEventListener('mouseleave', () => {
+        removeTemporaryHighlight();
+      });
+
+      // Add a simple remove button
+      const removeButton = document.createElement('button');
+      removeButton.textContent = '-';
+      removeButton.style.border = 'none';
+      removeButton.style.background = 'none';
+      removeButton.style.color = '#fff';
+      removeButton.style.cursor = 'pointer';
+      removeButton.style.fontSize = '16px';
+      removeButton.style.marginLeft = '5px';
+      removeButton.title = 'Remove range';
+
+      // Remove the range when the button is clicked
+      removeButton.addEventListener('click', () => {
+        removeRange(range.id);
+      });
+
+      container.append(label, removeButton);
+
+      // Prepend the new range to the top of the range list
+      const rangeList = document.getElementById('rangeList');
+      rangeList.insertBefore(container, rangeList.firstChild);
+    }
+
+    // Remove a range
+    function removeRange(id) {
+      const idx = ranges.findIndex(r => r.id === id);
+      if (idx === -1) return;
+      const [range] = ranges.splice(idx, 1);
+      highlight(range, false);
+      document.getElementById(`range-${id}`).remove();
+      saveRanges();
+
+      actionHistory.push({ type: 'remove', range });
+      if (actionHistory.length > 10) actionHistory.shift();
+
+      refreshRanges();
+    }
+
+    // Temporary highlight for hovering over a range
+    function highlightTemporary(range) {
+      document.querySelectorAll('.square').forEach(sq => {
+        const s = parseInt(sq.dataset.start, 10);
+        const e = parseInt(sq.dataset.end, 10);
+        if (e >= range.start && s <= range.end) {
+          sq.style.backgroundColor = 'yellow'; // Temporary yellow highlight
+        }
+      });
+    }
+
+    // Remove temporary highlight
+    function removeTemporaryHighlight() {
+      document.querySelectorAll('.square').forEach(sq => {
+        sq.style.backgroundColor = ''; // Reset background color
+      });
+      refreshRanges(); // Reapply saved highlights
+    }
+
+    // Add range functionality for the "+" button inside the input box
+    document.getElementById('addRange').addEventListener('click', addRange);
+
+    // Add range functionality for pressing "Enter" in the input box
+    document.getElementById('rangeInput').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        addRange();
+      }
+    });
+
+    // Function to add a new range
+    function addRange() {
+      const input = document.getElementById('rangeInput').value.trim();
+      if (!/^\d+#\d+$/.test(input)) {
+        showFloatingMessage('Use format: start#end');
+        return;
+      }
+      let [s, e] = input.split('#').map(Number);
+      if (s < START_NUM || e < START_NUM || s > END_NUM || e > END_NUM) {
+        showFloatingMessage(`Numbers must be between ${START_NUM} and ${END_NUM}`);
+        return;
+      }
+      const range = { id: nextId++, start: Math.min(s, e), end: Math.max(s, e) };
+      ranges.push(range);
+      highlight(range, true); // Highlight the new range
+      logRange(range);
+      saveRanges();
+
+      actionHistory.push({ type: 'add', range });
+      if (actionHistory.length > 10) actionHistory.shift();
+
+      refreshRanges(); // Reapply highlights
+      document.getElementById('rangeInput').value = ''; // Clear input
+    }
+
+    // Undo functionality
+    function undoAction() {
+      if (actionHistory.length === 0) {
+        showFloatingMessage('No action to undo');
+        return;
+      }
+
+      const { type, range } = actionHistory.pop();
+
+      if (type === 'add') {
+        const idx = ranges.findIndex(r => r.id === range.id);
+        if (idx !== -1) {
+          ranges.splice(idx, 1);
+          highlight(range, false);
+          document.getElementById(`range-${range.id}`).remove();
+          saveRanges();
+        }
+      } else if (type === 'remove') {
+        ranges.push(range);
+        highlight(range, true);
+        logRange(range);
+        saveRanges();
+      }
+
+      redoHistory.push({ type, range });
+      refreshRanges();
+    }
+
+    // Redo functionality
+    function redoAction() {
+      if (redoHistory.length === 0) {
+        showFloatingMessage('No action to redo');
+        return;
+      }
+
+      const { type, range } = redoHistory.pop();
+
+      if (type === 'add') {
+        ranges.push(range);
+        highlight(range, true);
+        logRange(range);
+        saveRanges();
+      } else if (type === 'remove') {
+        const idx = ranges.findIndex(r => r.id === range.id);
+        if (idx !== -1) {
+          ranges.splice(idx, 1);
+          highlight(range, false);
+          document.getElementById(`range-${range.id}`).remove();
+          saveRanges();
+        }
+      }
+
+      actionHistory.push({ type, range });
+      refreshRanges();
+    }
+
+    // Add keyboard shortcuts for undo and redo
+    document.addEventListener('keydown', (event) => {
+      if (event.ctrlKey && event.key === 'z' && !event.shiftKey) {
+        event.preventDefault();
+        undoAction();
+      } else if (event.ctrlKey && event.shiftKey && event.key === 'Z') {
+        event.preventDefault();
+        redoAction();
+      }
+    });
+
+    // Show a floating message
+    function showFloatingMessage(messageText) {
+      const message = document.createElement('div');
+      message.textContent = messageText;
+      message.style.position = 'fixed';
+      message.style.bottom = '20px';
+      message.style.right = '20px';
+      message.style.background = 'rgba(0, 0, 0, 0.7)';
+      message.style.color = '#fff';
+      message.style.padding = '10px';
+      message.style.borderRadius = '5px';
+      message.style.zIndex = '1000';
+      message.style.cursor = 'pointer';
+      document.body.appendChild(message);
+
+      // Remove the message when clicked
+      message.addEventListener('click', () => {
+        if (document.body.contains(message)) {
+          message.remove();
+        }
+      });
+
+      // Automatically remove the message after 2.5 seconds
+      setTimeout(() => {
+        if (document.body.contains(message)) {
+          message.remove();
+        }
+      }, 2500);
+    }
+
+    // Add event listener for the "Undo" button
+    document.getElementById('undoAction').addEventListener('click', undoAction);
+
+    // Add event listener for the "Back" button
+    document.getElementById('backToOriginalGrid').addEventListener('click', () => {
+      restoreOriginalGrid(); // Call the function to restore the original grid
+    });
+
+    // Initialize saved ranges
+    loadRanges();
+    makeGrid();
+    refreshRanges(); // Refresh highlights on page load/reload
+  </script>
+</body>
+</html>
